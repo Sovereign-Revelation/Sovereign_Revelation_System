@@ -1,0 +1,164 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://sovereign-revelation.org/schema/rituals/ad-revenue-ritual.schema.json",
+  "title": "Ad Revenue Ritual Workflow",
+  "description": "Workflow for gamifying ad revenue sharing via rituals in SRP.",
+  "type": "object",
+  "required": ["function", "schema", "steps", "metadata", "orchestration", "security"],
+  "properties": {
+    "function": {
+      "type": "string",
+      "const": "adRevenueRitual",
+      "description": "Workflow for gamified ad revenue sharing."
+    },
+    "metadata": {
+      "type": "object",
+      "properties": {
+        "schema_version": { "type": "string", "const": "5.3.1" },
+        "version": { "type": "string", "const": "1.0.0" },
+        "author": { "type": "string", "const": "Cipher" },
+        "description": { "type": "string", "const": "Gamifies ad revenue sharing with Pulse rewards and voucher payouts." },
+        "created": { "type": "string", "format": "date-time", "examples": ["2025-05-25T01:17:00Z"] },
+        "updated": { "type": "string", "format": "date-time", "examples": ["2025-05-25T01:17:00Z"] },
+        "tags": { "type": "array", "items": { "type": "string" }, "examples": [["ritual", "ads", "revenue"]] },
+        "visualization": { "type": "string", "examples": ["graph TD\nA[Start] --> B[Validate SID]\nB --> C[Record Ritual]\nC --> D[Distribute Revenue]"] },
+        "examples": { "type": "array", "items": { "type": "string", "format": "uri" }, "examples": [["https://github.com/srp-exodus/ad-ritual-examples"]] },
+        "docs": { "type": "string", "format": "uri", "const": "https://sovereign-revelation.org/docs/ad-revenue-ritual" },
+        "tooling": { "type": "array", "items": { "type": "string" }, "examples": [["vscode", "jsonflow-cli", "ethers.js"]] },
+        "compliance": { "type": "array", "items": { "type": "string" }, "examples": [["GDPR", "CCPA"]] },
+        "license": { "type": "string", "const": "MIT" },
+        "standards": { "type": "array", "items": { "type": "string" }, "examples": [["OpenAPI"]] }
+      },
+      "required": ["schema_version", "version", "author", "description", "examples", "docs", "license"]
+    },
+    "schema": {
+      "type": "object",
+      "properties": {
+        "inputs": {
+          "type": "object",
+          "properties": {
+            "sid": {
+              "type": "string",
+              "description": "Soulbound Identity of the ritual participant.",
+              "constraints": { "pattern": "^0x[a-fA-F0-9]{40}$" }
+            },
+            "adId": {
+              "type": "string",
+              "description": "Unique ad ID.",
+              "constraints": { "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$" }
+            },
+            "pulseScore": {
+              "type": "integer",
+              "description": "User’s Pulse Score for revenue weighting.",
+              "constraints": { "minimum": 0 }
+            }
+          },
+          "required": ["sid", "adId", "pulseScore"]
+        },
+        "outputs": {
+          "type": "object",
+          "properties": {
+            "ritualId": {
+              "type": "string",
+              "description": "Unique ritual ID.",
+              "destination": "database",
+              "constraints": { "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$" }
+            },
+            "voucherId": {
+              "type": "string",
+              "description": "Voucher ID for revenue payout.",
+              "destination": "blockchain",
+              "constraints": { "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$" }
+            }
+          },
+          "required": ["ritualId", "voucherId"]
+        }
+      },
+      "required": ["inputs", "outputs"]
+    },
+    "steps": {
+      "type": "array",
+      "items": [
+        {
+          "id": "validateSID",
+          "type": "control",
+          "action": "validate",
+          "language": "javascript",
+          "code": "if (!input.sid.match(/^0x[a-fA-F0-9]{40}$/)) throw new Error('Invalid SID');",
+          "input": "schema.inputs.sid",
+          "on_error": { "action": "fail", "error_code": "INVALID_SID" }
+        },
+        {
+          "id": "recordRitual",
+          "type": "database",
+          "action": "store",
+          "language": "javascript",
+          "code": "await db.rituals.insert({ ritualId: uuid(), adId: input.adId });",
+          "input": "schema.inputs.adId",
+          "output": "schema.outputs.ritualId",
+          "on_error": { "action": "retry", "max_retries": 3 }
+        },
+        {
+          "id": "distributeRevenue",
+          "type": "blockchain",
+          "action": "executeContract",
+          "language": "solidity",
+          "tool": "ethers.js",
+          "code": "await contract.createVoucher(input.sid, { amount: calculateReward(input.pulseScore), assetType: 'ETH' }, ethers.utils.sha256('ritual'));",
+          "input": "schema.inputs",
+          "output": "schema.outputs.voucherId",
+          "on_error": { "action": "retry", "max_retries": 3 }
+        }
+      ],
+      "minItems": 1
+    },
+    "security": {
+      "type": "object",
+      "properties": {
+        "authentication": { "type": "object", "properties": { "type": { "type": "string", "const": "none" } }, "required": ["type"] },
+        "authorization": {
+          "type": "object",
+          "properties": {
+            "type": { "type": "string", "const": "rbac" },
+            "roles": { "type": "array", "items": { "type": "string" }, "examples": [["user"]] },
+            "permissions": { "type": "array", "items": { "type": "string" }, "examples": [["participate_ritual"]] }
+          },
+          "required": ["type", "roles", "permissions"]
+        },
+        "encryption": {
+          "type": "object",
+          "properties": { "algorithm": { "type": "string", "const": "AES-256" }, "key_management": { "type": "string", "const": "vault" } },
+          "required": ["algorithm"]
+        },
+        "secrets": {
+          "type": "object",
+          "properties": { "manager": { "type": "string", "const": "hashicorp-vault" }, "refs": { "type": "array", "items": { "type": "string" }, "examples": [["ritual_key"]] } },
+          "required": ["manager"]
+        }
+      },
+      "required": ["authentication", "authorization", "encryption", "secrets"]
+    },
+    "blockchain": {
+      "type": "object",
+      "properties": {
+        "chain": { "type": "string", "enum": ["ethereum", "polkadot", "cosmos"] },
+        "network": {
+          "type": "object",
+          "properties": { "rpc_url": { "type": "string", "format": "uri" }, "chain_id": { "type": "integer", "minimum": 1 } },
+          "required": ["rpc_url", "chain_id"]
+        }
+      },
+      "required": ["chain", "network"]
+    },
+    "orchestration": {
+      "type": "object",
+      "properties": {
+        "type": { "type": "string", "const": "sequential" },
+        "runtime": { "type": "string", "const": "nodejs" },
+        "scaling": { "type": "object", "properties": { "min_instances": { "type": "integer", "const": 1 }, "max_instances": { "type": "integer", "const": 5 } } }
+      },
+      "required": ["type", "runtime"]
+    }
+  },
+  "additionalProperties": false
+}

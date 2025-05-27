@@ -1,0 +1,173 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://sovereign-revelation.org/schema/voucher/voucher.schema.json",
+  "title": "Sovereign Voucher Workflow",
+  "description": "Workflow for creating, transferring, and redeeming Sovereign Vouchers in SRP.",
+  "type": "object",
+  "required": ["function", "schema", "steps", "metadata", "orchestration", "security"],
+  "properties": {
+    "function": {
+      "type": "string",
+      "const": "manageVoucher",
+      "description": "Workflow for Sovereign Voucher operations."
+    },
+    "metadata": {
+      "type": "object",
+      "properties": {
+        "schema_version": { "type": "string", "const": "5.3.1" },
+        "version": { "type": "string", "const": "1.0.0" },
+        "author": { "type": "string", "const": "Cipher" },
+        "description": { "type": "string", "const": "Manages peer-to-peer value agreements via Sovereign Vouchers." },
+        "created": { "type": "string", "format": "date-time", "examples": ["2025-05-25T01:17:00Z"] },
+        "updated": { "type": "string", "format": "date-time", "examples": ["2025-05-25T01:17:00Z"] },
+        "tags": { "type": "array", "items": { "type": "string" }, "examples": [["voucher", "blockchain", "sovereignty"]] },
+        "visualization": { "type": "string", "examples": ["graph TD\nA[Start] --> B[Validate SID]\nB --> C[Create Voucher]\nC --> D[Transfer/ Redeem]"] },
+        "examples": { "type": "array", "items": { "type": "string", "format": "uri" }, "examples": [["https://github.com/srp-exodus/voucher-examples"]] },
+        "docs": { "type": "string", "format": "uri", "const": "https://sovereign-revelation.org/docs/voucher" },
+        "tooling": { "type": "array", "items": { "type": "string" }, "examples": [["vscode", "jsonflow-cli", "web3.js"]] },
+        "compliance": { "type": "array", "items": { "type": "string" }, "examples": [["GDPR"]] },
+        "license": { "type": "string", "const": "MIT" },
+        "standards": { "type": "array", "items": { "type": "string" }, "examples": [["OpenAPI", "CloudEvents"]] }
+      },
+      "required": ["schema_version", "version", "author", "description", "examples", "docs", "license"]
+    },
+    "schema": {
+      "type": "object",
+      "properties": {
+        "inputs": {
+          "type": "object",
+          "properties": {
+            "creatorSID": {
+              "type": "string",
+              "description": "Soulbound Identity of the voucher creator.",
+              "constraints": { "pattern": "^0x[a-fA-F0-9]{40}$" }
+            },
+            "value": {
+              "type": "object",
+              "description": "Asset value of the voucher.",
+              "properties": {
+                "amount": { "type": "string", "pattern": "^\\d+\\.\\d{1,18}$" },
+                "assetType": { "type": "string", "enum": ["ETH", "ERC20", "DOT", "ATOM"] },
+                "contractAddress": { "type": "string", "pattern": "^0x[a-fA-F0-9]{40}$" }
+              },
+              "required": ["amount", "assetType", "contractAddress"]
+            },
+            "password": { "type": "string", "description": "Password for voucher encryption.", "minLength": 8 }
+          },
+          "required": ["creatorSID", "value", "password"]
+        },
+        "outputs": {
+          "type": "object",
+          "properties": {
+            "voucherId": {
+              "type": "string",
+              "description": "Unique voucher ID.",
+              "destination": "blockchain",
+              "constraints": { "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$" }
+            },
+            "status": {
+              "type": "string",
+              "description": "Voucher status (created, transferred, redeemed).",
+              "destination": "database",
+              "enum": ["created", "transferred", "redeemed"]
+            }
+          },
+          "required": ["voucherId", "status"]
+        }
+      },
+      "required": ["inputs", "outputs"]
+    },
+    "steps": {
+      "type": "array",
+      "items": [
+        {
+          "id": "validateSID",
+          "type": "control",
+          "action": "validate",
+          "language": "javascript",
+          "code": "if (!input.creatorSID.match(/^0x[a-fA-F0-9]{40}$/)) throw new Error('Invalid SID');",
+          "input": "schema.inputs.creatorSID",
+          "output": "schema.outputs.validated",
+          "on_error": { "action": "fail", "error_code": "INVALID_SID" }
+        },
+        {
+          "id": "createVoucher",
+          "type": "blockchain",
+          "action": "executeContract",
+          "language": "solidity",
+          "tool": "ethers.js",
+          "code": "await contract.createVoucher(input.creatorSID, input.value, ethers.utils.sha256(input.password));",
+          "input": "schema.inputs",
+          "output": "schema.outputs.voucherId",
+          "on_error": { "action": "retry", "max_retries": 3 }
+        },
+        {
+          "id": "storeVoucher",
+          "type": "database",
+          "action": "store",
+          "language": "javascript",
+          "code": "await db.vouchers.insert({ voucherId: output.voucherId, status: 'created' });",
+          "input": "schema.outputs.voucherId",
+          "output": "schema.outputs.status",
+          "on_error": { "action": "notify", "error_code": "DB_ERROR" }
+        }
+      ],
+      "minItems": 1
+    },
+    "security": {
+      "type": "object",
+      "properties": {
+        "authentication": { "type": "object", "properties": { "type": { "type": "string", "const": "none" } }, "required": ["type"] },
+        "authorization": {
+          "type": "object",
+          "properties": {
+            "type": { "type": "string", "const": "rbac" },
+            "roles": { "type": "array", "items": { "type": "string" }, "examples": [["creator", "receiver"]] },
+            "permissions": { "type": "array", "items": { "type": "string" }, "examples": [["create_voucher", "transfer_voucher", "redeem_voucher"]] }
+          },
+          "required": ["type", "roles", "permissions"]
+        },
+        "encryption": {
+          "type": "object",
+          "properties": { "algorithm": { "type": "string", "const": "AES-256" }, "key_management": { "type": "string", "const": "vault" } },
+          "required": ["algorithm"]
+        },
+        "secrets": {
+          "type": "object",
+          "properties": { "manager": { "type": "string", "const": "hashicorp-vault" }, "refs": { "type": "array", "items": { "type": "string" }, "examples": [["voucher_key"]] } },
+          "required": ["manager"]
+        }
+      },
+      "required": ["authentication", "authorization", "encryption", "secrets"]
+    },
+    "blockchain": {
+      "type": "object",
+      "properties": {
+        "chain": { "type": "string", "enum": ["ethereum", "polkadot", "cosmos"] },
+        "contract": {
+          "type": "object",
+          "properties": {
+            "address": { "type": "string", "pattern": "^0x[a-fA-F0-9]{40}$" },
+            "abi": { "type": "string", "format": "uri", "examples": ["https://sovereign-revelation.org/abi/voucher"] }
+          }
+        },
+        "network": {
+          "type": "object",
+          "properties": { "rpc_url": { "type": "string", "format": "uri" }, "chain_id": { "type": "integer", "minimum": 1 } },
+          "required": ["rpc_url", "chain_id"]
+        }
+      },
+      "required": ["chain", "network"]
+    },
+    "orchestration": {
+      "type": "object",
+      "properties": {
+        "type": { "type": "string", "const": "sequential" },
+        "runtime": { "type": "string", "const": "nodejs" },
+        "scaling": { "type": "object", "properties": { "min_instances": { "type": "integer", "const": 1 }, "max_instances": { "type": "integer", "const": 5 } } }
+      },
+      "required": ["type", "runtime"]
+    }
+  },
+  "additionalProperties": false
+}
